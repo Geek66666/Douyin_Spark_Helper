@@ -1,0 +1,69 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DouYin Spark Flow - Admin 登录</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="login-card">
+      <h1>管理员登录</h1>
+      <p class="subtitle">账号固定为 <code>admin</code>，密码为环境变量 <code>PASSWORD</code></p>
+      {% if password_missing %}
+      <div class="alert warning">服务端未设置 <code>PASSWORD</code> 环境变量，当前无法登录。</div>
+      {% endif %}
+      <div class="field">
+        <label for="password">管理员密码</label>
+        <input id="password" type="password" placeholder="请输入 PASSWORD" autocomplete="current-password">
+      </div>
+      <button id="loginBtn" class="btn primary">进入后台</button>
+      <p id="loginMsg" class="msg"></p>
+      <div class="auth-links">
+        <a href="/login">返回用户登录</a>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const loginBtn = document.getElementById("loginBtn");
+    const passwordInput = document.getElementById("password");
+    const loginMsg = document.getElementById("loginMsg");
+
+    async function doLogin() {
+      const password = passwordInput.value.trim();
+      if (!password) {
+        loginMsg.textContent = "请输入管理员密码。";
+        return;
+      }
+
+      loginBtn.disabled = true;
+      loginMsg.textContent = "正在校验...";
+      try {
+        const resp = await fetch("/api/admin/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password }),
+          credentials: "same-origin",
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+          throw new Error(data.message || "登录失败");
+        }
+        loginMsg.textContent = "登录成功，正在跳转...";
+        window.location.href = "/admin";
+      } catch (err) {
+        loginMsg.textContent = "登录失败：" + err.message;
+      } finally {
+        loginBtn.disabled = false;
+      }
+    }
+
+    loginBtn.addEventListener("click", doLogin);
+    passwordInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") doLogin();
+    });
+  </script>
+</body>
+</html>

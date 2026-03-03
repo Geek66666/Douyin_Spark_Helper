@@ -1,0 +1,82 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DouYin Spark Flow - 用户注册</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="login-card">
+      <h1>用户注册</h1>
+      <p class="subtitle">上传 <code>usersData.json</code>，系统将自动提取用户名并创建独立任务空间</p>
+
+      <div class="field">
+        <label for="usersFile">上传 usersData.json</label>
+        <input id="usersFile" type="file" accept="application/json,.json">
+      </div>
+      <div class="field">
+        <label for="password">设置登录密码</label>
+        <input id="password" type="password" placeholder="至少 4 位" autocomplete="new-password">
+      </div>
+
+      <button id="registerBtn" class="btn primary">注册账号</button>
+      <p id="registerMsg" class="msg"></p>
+      <div class="auth-links">
+        <a href="/login">已有账号？去登录</a>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const registerBtn = document.getElementById("registerBtn");
+    const usersFileInput = document.getElementById("usersFile");
+    const passwordInput = document.getElementById("password");
+    const registerMsg = document.getElementById("registerMsg");
+
+    async function doRegister() {
+      const file = usersFileInput.files[0];
+      const password = passwordInput.value.trim();
+      if (!file) {
+        registerMsg.textContent = "请先上传 usersData.json 文件。";
+        return;
+      }
+      if (!password) {
+        registerMsg.textContent = "请输入登录密码。";
+        return;
+      }
+
+      registerBtn.disabled = true;
+      registerMsg.textContent = "正在注册...";
+
+      try {
+        const formData = new FormData();
+        formData.append("users_file", file);
+        formData.append("password", password);
+
+        const resp = await fetch("/api/register", {
+          method: "POST",
+          body: formData,
+          credentials: "same-origin",
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+          throw new Error(data.message || "注册失败");
+        }
+
+        registerMsg.textContent = `注册成功，用户名为 ${data.username}，正在跳转登录页...`;
+        setTimeout(() => {
+          window.location.href = "/login";
+        }, 1200);
+      } catch (err) {
+        registerMsg.textContent = "注册失败：" + err.message;
+      } finally {
+        registerBtn.disabled = false;
+      }
+    }
+
+    registerBtn.addEventListener("click", doRegister);
+  </script>
+</body>
+</html>

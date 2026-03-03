@@ -1,0 +1,430 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DouYin Spark Flow - 控制台</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="dash-body">
+  <header class="topbar">
+    <div>
+      <h1>DouYin Spark Flow 控制台</h1>
+      <p>每日自动任务 + 手动执行 + 实时日志{% if username %} · 当前用户：{{ username }}{% endif %}</p>
+    </div>
+    <button id="logoutBtn" class="btn ghost">退出登录</button>
+  </header>
+
+  <main class="container">
+    <section class="panel quick">
+      <div class="status-row">
+        <span class="status-label">运行状态</span>
+        <span id="runBadge" class="badge idle">空闲</span>
+      </div>
+      <div class="control-grid">
+        <div class="field">
+          <label for="taskTime">每日执行时间（北京时间）</label>
+          <input id="taskTime" type="time" value="{{ default_time }}">
+        </div>
+        <button id="saveScheduleBtn" class="btn">保存定时</button>
+        <button id="runNowBtn" class="btn primary">立即执行任务</button>
+      </div>
+      <p id="actionMsg" class="msg"></p>
+    </section>
+
+    <section class="stats-grid">
+      <article class="card">
+        <h3>账号数量</h3>
+        <p id="accountCount">-</p>
+      </article>
+      <article class="card">
+        <h3>目标好友总数</h3>
+        <p id="targetCount">-</p>
+      </article>
+      <article class="card">
+        <h3>最近触发方式</h3>
+        <p id="lastTrigger">-</p>
+      </article>
+      <article class="card">
+        <h3>最近执行结果</h3>
+        <p id="lastStatus">-</p>
+      </article>
+      <article class="card">
+        <h3>最近开始时间</h3>
+        <p id="lastStart">-</p>
+      </article>
+      <article class="card">
+        <h3>下一次执行时间</h3>
+        <p id="nextRun">-</p>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>消息内容编辑</h2>
+        <button id="saveMessageBtn" class="btn">保存消息内容</button>
+      </div>
+      <div class="field">
+        <label for="messageTemplate">消息模板（支持换行，支持 [API] 占位符）</label>
+        <textarea id="messageTemplate" rows="5" placeholder="请输入发送内容模板"></textarea>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>目标好友编辑（勾选即本次生效）</h2>
+        <button id="saveTargetsBtn" class="btn">保存目标好友</button>
+      </div>
+      <div id="targetEditor" class="target-editor">
+        <p class="muted">加载中...</p>
+      </div>
+      <p id="editorMsg" class="msg"></p>
+    </section>
+
+    <section class="panel">
+      <h2>运行历史（最多 50 条）</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>触发方式</th>
+              <th>开始时间</th>
+              <th>结束时间</th>
+              <th>状态</th>
+              <th>耗时</th>
+              <th>信息</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr><td colspan="6">暂无记录</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>实时日志</h2>
+        <button id="refreshBtn" class="btn ghost">立即刷新</button>
+      </div>
+      <pre id="logBox">加载中...</pre>
+    </section>
+  </main>
+
+  <script>
+    const runBadge = document.getElementById("runBadge");
+    const actionMsg = document.getElementById("actionMsg");
+    const historyBody = document.getElementById("historyBody");
+    const taskTimeInput = document.getElementById("taskTime");
+    const logBox = document.getElementById("logBox");
+    const accountCount = document.getElementById("accountCount");
+    const targetCount = document.getElementById("targetCount");
+    const lastTrigger = document.getElementById("lastTrigger");
+    const lastStatus = document.getElementById("lastStatus");
+    const lastStart = document.getElementById("lastStart");
+    const nextRun = document.getElementById("nextRun");
+    const messageTemplateInput = document.getElementById("messageTemplate");
+    const targetEditor = document.getElementById("targetEditor");
+    const editorMsg = document.getElementById("editorMsg");
+    let isEditingTime = false;
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function targetRowHtml(target, checked = true) {
+      const safeTarget = escapeHtml(target);
+      return `
+        <label class="target-item">
+          <input type="checkbox" class="target-checkbox" data-target="${safeTarget}" ${checked ? "checked" : ""}>
+          <span>${safeTarget}</span>
+        </label>
+      `;
+    }
+
+    function setMessage(msg, isError = false) {
+      actionMsg.textContent = msg || "";
+      actionMsg.style.color = isError ? "#c0392b" : "#146356";
+    }
+
+    function setEditorMessage(msg, isError = false) {
+      editorMsg.textContent = msg || "";
+      editorMsg.style.color = isError ? "#c0392b" : "#146356";
+    }
+
+    async function requestJSON(url, options = {}) {
+      const resp = await fetch(url, {
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        ...options,
+      });
+      if (resp.status === 401) {
+        window.location.href = "/login";
+        throw new Error("登录已失效，请重新登录。");
+      }
+      const data = await resp.json();
+      if (!resp.ok || data.ok === false) {
+        throw new Error(data.message || ("请求失败: " + resp.status));
+      }
+      return data;
+    }
+
+    function renderStatus(runtime) {
+      runBadge.textContent = runtime.is_running ? "运行中" : "空闲";
+      runBadge.className = runtime.is_running ? "badge running" : "badge idle";
+      accountCount.textContent = runtime.account_count;
+      targetCount.textContent = runtime.target_count;
+      lastTrigger.textContent = runtime.last_trigger;
+      lastStatus.textContent = runtime.last_status;
+      lastStart.textContent = runtime.last_start;
+      nextRun.textContent = runtime.next_run;
+      if (!isEditingTime) {
+        taskTimeInput.value = runtime.schedule_time;
+      }
+    }
+
+    function renderHistory(rows) {
+      if (!rows || rows.length === 0) {
+        historyBody.innerHTML = '<tr><td colspan="6">暂无记录</td></tr>';
+        return;
+      }
+      historyBody.innerHTML = rows
+        .map(
+          (row) => `
+        <tr>
+          <td>${row.trigger}</td>
+          <td>${row.start}</td>
+          <td>${row.end}</td>
+          <td>${row.status}</td>
+          <td>${row.duration}</td>
+          <td>${row.message}</td>
+        </tr>
+      `,
+        )
+        .join("");
+    }
+
+    function renderTargetEditor(users) {
+      if (!users || users.length === 0) {
+        targetEditor.innerHTML = '<p class="muted">暂无账号数据，请先完成登录并写入 usersData.json。</p>';
+        return;
+      }
+
+      targetEditor.innerHTML = users
+        .map((user) => {
+          const username = escapeHtml(user.username || "未知用户");
+          const uniqueId = escapeHtml(user.unique_id || "");
+          const targets = Array.isArray(user.targets) ? user.targets : [];
+          const targetList = targets.length
+            ? targets.map((item) => targetRowHtml(item, true)).join("")
+            : '<p class="muted mini">暂无目标，可在下方手动添加。</p>';
+          return `
+          <article class="target-user-card" data-uid="${uniqueId}">
+            <div class="target-user-head">
+              <strong>${username}</strong>
+              <span>${uniqueId}</span>
+            </div>
+            <div class="target-list">${targetList}</div>
+            <div class="add-target-row">
+              <input type="text" class="new-target-input" placeholder="输入好友昵称后点击添加">
+              <button type="button" class="btn add-target-btn">添加</button>
+            </div>
+          </article>
+        `;
+        })
+        .join("");
+
+      targetEditor.querySelectorAll(".add-target-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const card = btn.closest(".target-user-card");
+          const input = card.querySelector(".new-target-input");
+          const list = card.querySelector(".target-list");
+          const value = input.value.trim();
+          if (!value) {
+            setEditorMessage("请输入要添加的目标昵称。", true);
+            return;
+          }
+
+          const exists = Array.from(card.querySelectorAll(".target-checkbox")).find(
+            (el) => (el.dataset.target || "").trim() === value,
+          );
+          if (exists) {
+            exists.checked = true;
+            setEditorMessage(`目标「${value}」已存在，已重新勾选。`);
+          } else {
+            const muted = list.querySelector(".muted");
+            if (muted) muted.remove();
+            list.insertAdjacentHTML("beforeend", targetRowHtml(value, true));
+            setEditorMessage(`已添加目标「${value}」。`);
+          }
+
+          input.value = "";
+          input.focus();
+        });
+      });
+
+      targetEditor.querySelectorAll(".new-target-input").forEach((input) => {
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            input.closest(".add-target-row").querySelector(".add-target-btn").click();
+          }
+        });
+      });
+    }
+
+    function collectTargetsPayload() {
+      const users = Array.from(document.querySelectorAll(".target-user-card")).map((card) => {
+        const uniqueId = (card.dataset.uid || "").trim();
+        const targets = Array.from(card.querySelectorAll(".target-checkbox:checked"))
+          .map((el) => (el.dataset.target || "").trim())
+          .filter(Boolean);
+        return { unique_id: uniqueId, targets };
+      });
+      return { users };
+    }
+
+    async function refreshStatus() {
+      const data = await requestJSON("/api/status");
+      renderStatus(data.runtime);
+      renderHistory(data.history);
+    }
+
+    async function refreshLogs() {
+      const data = await requestJSON("/api/logs?limit=1200");
+      logBox.textContent = data.logs || "暂无日志。";
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    async function refreshEditorState() {
+      const data = await requestJSON("/api/editor/state");
+      messageTemplateInput.value = data.message_template || "";
+      renderTargetEditor(data.users || []);
+    }
+
+    async function refreshAll(withEditor = false) {
+      try {
+        const tasks = [refreshStatus(), refreshLogs()];
+        if (withEditor) tasks.push(refreshEditorState());
+        await Promise.all(tasks);
+      } catch (err) {
+        setMessage(err.message, true);
+      }
+    }
+
+    async function persistEditorsBeforeRun() {
+      const message = messageTemplateInput.value;
+      if (!message.trim()) {
+        throw new Error("消息内容不能为空，请先填写后再执行任务。");
+      }
+      await requestJSON("/api/editor/message", {
+        method: "POST",
+        body: JSON.stringify({ message }),
+      });
+
+      const payload = collectTargetsPayload();
+      if (payload.users.length) {
+        await requestJSON("/api/editor/targets", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+      }
+    }
+
+    document.getElementById("runNowBtn").addEventListener("click", async () => {
+      setMessage("正在保存编辑内容并触发任务...");
+      try {
+        await persistEditorsBeforeRun();
+        const data = await requestJSON("/api/run", { method: "POST", body: "{}" });
+        setMessage(data.message || "任务已启动。");
+        setEditorMessage("已在执行前自动保存消息内容和目标好友。");
+        await refreshAll();
+      } catch (err) {
+        setMessage(err.message, true);
+      }
+    });
+
+    document.getElementById("saveScheduleBtn").addEventListener("click", async () => {
+      const time = taskTimeInput.value;
+      if (!time) {
+        setMessage("请先选择时间。", true);
+        return;
+      }
+      isEditingTime = true;
+      setMessage("正在保存定时...");
+      try {
+        const data = await requestJSON("/api/schedule", {
+          method: "POST",
+          body: JSON.stringify({ time }),
+        });
+        setMessage(
+          (data.message || "定时已更新。") + (data.next_run ? " 下一次执行：" + data.next_run : ""),
+        );
+        await refreshStatus();
+      } catch (err) {
+        setMessage(err.message, true);
+      } finally {
+        isEditingTime = false;
+      }
+    });
+
+    document.getElementById("saveMessageBtn").addEventListener("click", async () => {
+      const message = messageTemplateInput.value;
+      if (!message.trim()) {
+        setEditorMessage("消息内容不能为空。", true);
+        return;
+      }
+      setEditorMessage("正在保存消息内容...");
+      try {
+        const data = await requestJSON("/api/editor/message", {
+          method: "POST",
+          body: JSON.stringify({ message }),
+        });
+        setEditorMessage(data.message || "消息模板已保存。");
+      } catch (err) {
+        setEditorMessage(err.message, true);
+      }
+    });
+
+    document.getElementById("saveTargetsBtn").addEventListener("click", async () => {
+      const payload = collectTargetsPayload();
+      if (!payload.users.length) {
+        setEditorMessage("当前没有可保存的账号。", true);
+        return;
+      }
+      setEditorMessage("正在保存目标好友...");
+      try {
+        const data = await requestJSON("/api/editor/targets", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setEditorMessage(data.message || "目标好友已保存。");
+        await refreshStatus();
+      } catch (err) {
+        setEditorMessage(err.message, true);
+      }
+    });
+
+    document.getElementById("logoutBtn").addEventListener("click", async () => {
+      await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+      window.location.href = "/login";
+    });
+
+    document.getElementById("refreshBtn").addEventListener("click", () => refreshAll(true));
+    taskTimeInput.addEventListener("focus", () => {
+      isEditingTime = true;
+    });
+    taskTimeInput.addEventListener("blur", () => {
+      isEditingTime = false;
+    });
+
+    refreshAll(true);
+    setInterval(refreshAll, 5000);
+  </script>
+</body>
+</html>

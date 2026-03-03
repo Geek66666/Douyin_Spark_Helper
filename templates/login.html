@@ -1,0 +1,73 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DouYin Spark Flow - 用户登录</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="login-card">
+      <h1>DouYin Spark Flow</h1>
+      <p class="subtitle">普通用户登录</p>
+      <div class="field">
+        <label for="username">用户名</label>
+        <input id="username" type="text" placeholder="请输入注册时自动提取的用户名" autocomplete="username">
+      </div>
+      <div class="field">
+        <label for="password">登录密码</label>
+        <input id="password" type="password" placeholder="请输入注册时设置的密码" autocomplete="current-password">
+      </div>
+      <button id="loginBtn" class="btn primary">登录控制台</button>
+      <p id="loginMsg" class="msg"></p>
+      <div class="auth-links">
+        <a href="/register">没有账号？去注册</a>
+        <a href="/admin">管理员入口</a>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const loginBtn = document.getElementById("loginBtn");
+    const usernameInput = document.getElementById("username");
+    const passwordInput = document.getElementById("password");
+    const loginMsg = document.getElementById("loginMsg");
+
+    async function doLogin() {
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value.trim();
+      if (!username || !password) {
+        loginMsg.textContent = "请输入用户名和密码。";
+        return;
+      }
+
+      loginBtn.disabled = true;
+      loginMsg.textContent = "正在校验...";
+      try {
+        const resp = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+          credentials: "same-origin"
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+          throw new Error(data.message || "登录失败");
+        }
+        loginMsg.textContent = "登录成功，正在跳转...";
+        window.location.href = "/";
+      } catch (err) {
+        loginMsg.textContent = "登录失败：" + err.message;
+      } finally {
+        loginBtn.disabled = false;
+      }
+    }
+
+    loginBtn.addEventListener("click", doLogin);
+    passwordInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") doLogin();
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,389 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DouYin Spark Flow - Admin 控制台</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="dash-body">
+  <header class="topbar">
+    <div>
+      <h1>Admin 后台管理</h1>
+      <p>用户管理 + 定时任务总览</p>
+    </div>
+    <div class="top-actions">
+      <button id="refreshBtn" class="btn ghost">刷新</button>
+      <button id="logoutBtn" class="btn ghost">退出登录</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="panel">
+      <h2>用户与任务总览</h2>
+      <p id="summary" class="muted">加载中...</p>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>发起用户</th>
+              <th>唯一标识</th>
+              <th>注册时间</th>
+              <th>定时状态</th>
+              <th>发送时间</th>
+              <th>消息内容</th>
+              <th>接收方</th>
+              <th>下次执行</th>
+              <th>最近状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="adminBody">
+            <tr><td colspan="10">暂无数据</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p id="adminMsg" class="msg"></p>
+    </section>
+
+    <section id="detailPanel" class="panel" style="display:none;">
+      <div class="panel-header">
+        <h2 id="detailTitle">任务详情</h2>
+        <button id="detailRefreshBtn" class="btn">刷新详情</button>
+      </div>
+
+      <div id="detailMeta" class="detail-grid"></div>
+
+      <div class="detail-split">
+        <article class="detail-card">
+          <h3>消息内容</h3>
+          <pre id="detailMessage" class="detail-message">-</pre>
+        </article>
+        <article class="detail-card">
+          <h3>接收方（去重后）</h3>
+          <pre id="detailTargets" class="detail-message">-</pre>
+        </article>
+      </div>
+
+      <article class="detail-card">
+        <h3>账号明细</h3>
+        <div class="table-wrap">
+          <table class="admin-table detail-history">
+            <thead>
+              <tr>
+                <th>账号昵称</th>
+                <th>unique_id</th>
+                <th>目标数</th>
+                <th>cookies 数</th>
+                <th>目标列表</th>
+              </tr>
+            </thead>
+            <tbody id="detailAccountsBody">
+              <tr><td colspan="5">暂无数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="detail-card">
+        <h3>执行历史</h3>
+        <div class="table-wrap">
+          <table class="admin-table detail-history">
+            <thead>
+              <tr>
+                <th>触发方式</th>
+                <th>开始时间</th>
+                <th>结束时间</th>
+                <th>状态</th>
+                <th>耗时</th>
+                <th>信息</th>
+              </tr>
+            </thead>
+            <tbody id="detailHistoryBody">
+              <tr><td colspan="6">暂无记录</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="detail-card">
+        <h3>任务日志</h3>
+        <pre id="detailLogs" class="detail-logbox">暂无日志。</pre>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const adminBody = document.getElementById("adminBody");
+    const summary = document.getElementById("summary");
+    const adminMsg = document.getElementById("adminMsg");
+    const detailPanel = document.getElementById("detailPanel");
+    const detailTitle = document.getElementById("detailTitle");
+    const detailMeta = document.getElementById("detailMeta");
+    const detailMessage = document.getElementById("detailMessage");
+    const detailTargets = document.getElementById("detailTargets");
+    const detailAccountsBody = document.getElementById("detailAccountsBody");
+    const detailHistoryBody = document.getElementById("detailHistoryBody");
+    const detailLogs = document.getElementById("detailLogs");
+    let currentDetailUser = null;
+
+    function setMsg(msg, isError = false) {
+      adminMsg.textContent = msg || "";
+      adminMsg.style.color = isError ? "#c0392b" : "#146356";
+    }
+
+    async function requestJSON(url, options = {}) {
+      const resp = await fetch(url, {
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        ...options,
+      });
+
+      if (resp.status === 401) {
+        window.location.href = "/admin";
+        throw new Error("登录已失效，请重新登录。");
+      }
+
+      const data = await resp.json();
+      if (!resp.ok || data.ok === false) {
+        throw new Error(data.message || "请求失败");
+      }
+      return data;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function clearDetailPanel() {
+      currentDetailUser = null;
+      detailPanel.style.display = "none";
+      detailTitle.textContent = "任务详情";
+      detailMeta.innerHTML = "";
+      detailMessage.textContent = "-";
+      detailTargets.textContent = "-";
+      detailLogs.textContent = "暂无日志。";
+      detailAccountsBody.innerHTML = '<tr><td colspan="5">暂无数据</td></tr>';
+      detailHistoryBody.innerHTML = '<tr><td colspan="6">暂无记录</td></tr>';
+    }
+
+    function renderRows(users) {
+      if (!users || users.length === 0) {
+        adminBody.innerHTML = '<tr><td colspan="10">暂无用户</td></tr>';
+        clearDetailPanel();
+        return;
+      }
+
+      adminBody.innerHTML = users.map((u) => {
+        if (u.error) {
+          return `
+            <tr>
+              <td>${escapeHtml(u.username)}</td>
+              <td>${escapeHtml(u.unique_id || "-")}</td>
+              <td>${escapeHtml(u.created_at || "-")}</td>
+              <td colspan="6" style="color:#c0392b;">数据异常：${escapeHtml(u.error)}</td>
+              <td>
+                <div class="admin-actions">
+                  <button class="btn admin-delete-user" data-user="${escapeHtml(u.username)}">删用户</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        }
+
+        const targets = Array.isArray(u.targets) ? u.targets : [];
+        const targetText = targets.length ? targets.join(" / ") : "-";
+        const statusText = u.is_running ? "运行中" : (u.last_status || "-");
+
+        return `
+          <tr>
+            <td>${escapeHtml(u.username)}</td>
+            <td>${escapeHtml(u.unique_id)}</td>
+            <td>${escapeHtml(u.created_at)}</td>
+            <td>${u.scheduler_enabled ? "启用" : "禁用"}</td>
+            <td>${escapeHtml(u.schedule_time)} (${escapeHtml(u.schedule_timezone)})</td>
+            <td class="ellipsis-cell" title="${escapeHtml(u.message_template || "")}">${escapeHtml(u.message_template || "-")}</td>
+            <td class="ellipsis-cell" title="${escapeHtml(targetText)}">${escapeHtml(targetText)}</td>
+            <td>${escapeHtml(u.next_run || "-")}</td>
+            <td>${escapeHtml(statusText)}</td>
+            <td>
+              <div class="admin-actions">
+                <button class="btn admin-view-task" data-user="${escapeHtml(u.username)}">详情/日志</button>
+                <button class="btn admin-del-task" data-user="${escapeHtml(u.username)}">删任务</button>
+                <button class="btn admin-delete-user" data-user="${escapeHtml(u.username)}">删用户</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+
+      document.querySelectorAll(".admin-view-task").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const username = btn.dataset.user;
+          await loadTaskDetail(username, true);
+        });
+      });
+
+      document.querySelectorAll(".admin-del-task").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const username = btn.dataset.user;
+          if (!confirm(`确认删除用户 ${username} 的定时任务？`)) return;
+          setMsg("正在删除任务...");
+          try {
+            const data = await requestJSON(`/api/admin/tasks/${encodeURIComponent(username)}/delete`, {
+              method: "POST",
+              body: "{}",
+            });
+            setMsg(data.message || "已删除任务");
+            await loadOverview();
+            if (currentDetailUser === username) {
+              await loadTaskDetail(username, false);
+            }
+          } catch (err) {
+            setMsg(err.message, true);
+          }
+        });
+      });
+
+      document.querySelectorAll(".admin-delete-user").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const username = btn.dataset.user;
+          if (!confirm(`确认删除用户 ${username}？该操作不可恢复。`)) return;
+          setMsg("正在删除用户...");
+          try {
+            const data = await requestJSON(`/api/admin/users/${encodeURIComponent(username)}`, {
+              method: "DELETE",
+            });
+            setMsg(data.message || "用户已删除");
+            if (currentDetailUser === username) {
+              clearDetailPanel();
+            }
+            await loadOverview();
+          } catch (err) {
+            setMsg(err.message, true);
+          }
+        });
+      });
+    }
+
+    function renderDetail(task) {
+      currentDetailUser = task.username;
+      detailPanel.style.display = "block";
+      detailTitle.textContent = `任务详情 · ${task.username}`;
+
+      const runtime = task.runtime || {};
+      const config = task.config || {};
+      const targets = Array.isArray(task.targets) ? task.targets : [];
+
+      detailMeta.innerHTML = `
+        <div class="detail-item"><span>发起用户</span><strong>${escapeHtml(task.username || "-")}</strong></div>
+        <div class="detail-item"><span>唯一标识</span><strong>${escapeHtml(task.unique_id || "-")}</strong></div>
+        <div class="detail-item"><span>注册时间</span><strong>${escapeHtml(task.created_at || "-")}</strong></div>
+        <div class="detail-item"><span>定时状态</span><strong>${task.scheduler_enabled ? "启用" : "禁用"}</strong></div>
+        <div class="detail-item"><span>发送时间</span><strong>${escapeHtml(task.schedule_time || "-")} (${escapeHtml(task.schedule_timezone || "-")})</strong></div>
+        <div class="detail-item"><span>下一次执行</span><strong>${escapeHtml(runtime.next_run || "-")}</strong></div>
+        <div class="detail-item"><span>最近状态</span><strong>${runtime.is_running ? "运行中" : escapeHtml(runtime.last_status || "-")}</strong></div>
+        <div class="detail-item"><span>最近开始</span><strong>${escapeHtml(runtime.last_start || "-")}</strong></div>
+        <div class="detail-item"><span>账号数 / 目标数</span><strong>${runtime.account_count || 0} / ${runtime.target_count || 0}</strong></div>
+        <div class="detail-item"><span>并发设置</span><strong>multiTask=${config.multiTask ? "true" : "false"}, taskCount=${config.taskCount || 1}</strong></div>
+      `;
+
+      detailMessage.textContent = task.message_template || "-";
+      detailTargets.textContent = targets.length ? targets.join("\n") : "-";
+      detailLogs.textContent = task.logs || "暂无日志。";
+
+      const accounts = Array.isArray(task.accounts) ? task.accounts : [];
+      if (!accounts.length) {
+        detailAccountsBody.innerHTML = '<tr><td colspan="5">暂无账号明细</td></tr>';
+      } else {
+        detailAccountsBody.innerHTML = accounts.map((item) => {
+          const t = Array.isArray(item.targets) ? item.targets : [];
+          return `
+            <tr>
+              <td>${escapeHtml(item.username || "-")}</td>
+              <td>${escapeHtml(item.unique_id || "-")}</td>
+              <td>${item.target_count || 0}</td>
+              <td>${item.cookie_count || 0}</td>
+              <td>${escapeHtml(t.join(" / ") || "-")}</td>
+            </tr>
+          `;
+        }).join("");
+      }
+
+      const history = Array.isArray(task.history) ? task.history : [];
+      if (!history.length) {
+        detailHistoryBody.innerHTML = '<tr><td colspan="6">暂无记录</td></tr>';
+      } else {
+        detailHistoryBody.innerHTML = history.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.trigger || "-")}</td>
+            <td>${escapeHtml(row.start || "-")}</td>
+            <td>${escapeHtml(row.end || "-")}</td>
+            <td>${escapeHtml(row.status || "-")}</td>
+            <td>${escapeHtml(row.duration || "-")}</td>
+            <td>${escapeHtml(row.message || "-")}</td>
+          </tr>
+        `).join("");
+      }
+    }
+
+    async function loadTaskDetail(username, showMessage = false) {
+      try {
+        const data = await requestJSON(`/api/admin/tasks/${encodeURIComponent(username)}?log_limit=1200`);
+        renderDetail(data.task || {});
+        if (showMessage) {
+          setMsg(`已加载 ${username} 的任务详情与日志。`);
+        }
+      } catch (err) {
+        setMsg(err.message, true);
+      }
+    }
+
+    async function loadOverview() {
+      const data = await requestJSON("/api/admin/overview");
+      summary.textContent = `共 ${data.task_count || 0} 个用户任务。`;
+      renderRows(data.users || []);
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", async () => {
+      try {
+        await loadOverview();
+        if (currentDetailUser) {
+          await loadTaskDetail(currentDetailUser, false);
+        }
+      } catch (err) {
+        setMsg(err.message, true);
+      }
+    });
+
+    document.getElementById("detailRefreshBtn").addEventListener("click", async () => {
+      if (!currentDetailUser) {
+        setMsg("请先在上方选择一个任务。", true);
+        return;
+      }
+      await loadTaskDetail(currentDetailUser, true);
+    });
+
+    document.getElementById("logoutBtn").addEventListener("click", async () => {
+      await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+      window.location.href = "/admin";
+    });
+
+    loadOverview().catch((err) => setMsg(err.message, true));
+    setInterval(async () => {
+      try {
+        await loadOverview();
+        if (currentDetailUser) {
+          await loadTaskDetail(currentDetailUser, false);
+        }
+      } catch (_) {
+      }
+    }, 8000);
+  </script>
+</body>
+</html>
