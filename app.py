@@ -45,7 +45,7 @@ DEFAULT_USER_CONFIG = {
     "multiTask": True,
     "taskCount": 5,
     "proxyAddress": "",
-    "messageTemplate": "续火花！！！",
+    "messageTemplate": "[续火花]",
     "hitokotoTypes": ["文学", "影视", "诗词", "哲学"],
     "scheduler": {
         "enabled": True,
